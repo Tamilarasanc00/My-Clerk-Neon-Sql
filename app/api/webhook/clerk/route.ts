@@ -1,40 +1,39 @@
 import { Webhook } from "svix";
 import { headers } from "next/headers";
-import { WebhookEvent } from "@clerk/nextjs/server";
-import createUser from "@/lib/actions/user.action";
+import type { WebhookEvent } from "@clerk/nextjs/server";
 import { NextResponse } from "next/server";
+import createUser from "@/lib/actions/user.action";
 
 export async function POST(req: Request) {
   const secret = process.env.SIGNING_SECRET;
-  if (!secret) throw new Error("Missing SIGNING_SECRET");
+  if (!secret) return new Response("Missing SIGNING_SECRET", { status: 500 });
 
-  const wh = new Webhook(secret);
+  // DON'T await headers() — call it synchronously
+  const headerList = headers() as unknown as { get(name: string): string | null };
 
-  const h =await headers();
   const svixHeaders = {
-    "svix-id": h.get("svix-id")!,
-    "svix-timestamp": h.get("svix-timestamp")!,
-    "svix-signature": h.get("svix-signature")!,
+    "svix-id": headerList.get("svix-id") ?? "",
+    "svix-timestamp": headerList.get("svix-timestamp") ?? "",
+    "svix-signature": headerList.get("svix-signature") ?? "",
   };
 
-  const payload = await req.text(); // important!
-  let evt: WebhookEvent;
+  const payload = await req.text();
+  const wh = new Webhook(secret);
 
+  let event: WebhookEvent;
   try {
-    evt = wh.verify(payload, svixHeaders) as WebhookEvent;
-  } catch (err) {
-    console.error("Webhook verify error", err);
+    event = wh.verify(payload, svixHeaders) as WebhookEvent;
+  } catch (error) {
+    console.error("Webhook signature verification failed:", error);
     return new Response("Invalid signature", { status: 400 });
   }
 
-  // user created
-  if (evt.type === "user.created") {
-    const d = evt.data;
-
+  if (event.type === "user.created") {
+    const d = event.data;
     const user = {
       clerkId: d.id,
       userName: d.username ?? d.first_name ?? "unknown",
-      age: 0, 
+      age: 0,
       email: d.email_addresses?.[0]?.email_address ?? "",
       mobile_no: d.phone_numbers?.[0]?.phone_number ?? "",
       userType: (d.public_metadata?.userType as string) ?? "user",
@@ -42,9 +41,7 @@ export async function POST(req: Request) {
     };
 
     await createUser(user);
-
-    return NextResponse.json({ success: true });
   }
 
-  return new Response("OK", { status: 200 });
+  return NextResponse.json({ success: true });
 }
